@@ -1,19 +1,18 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import Dashboard from './Dashboard';
 import Login from './Login';
-import ModuloDetalle from './ModuloDetalle';
-import AdminPanel from './AdminPanel'; // 👈 Importamos el panel
+import AdminPanel from './AdminPanel';
+import Dashboard from './Dashboard';
+import Modulo from './Modulo'; // <-- IMPORTAMOS EL NUEVO COMPONENTE
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Dashboard />} />
         <Route path="/login" element={<Login />} />
-        <Route path="/modulo/:id" element={<ModuloDetalle />} /> 
-        
-        {/* Nueva ruta secreta para el administrador */}
-        <Route path="/admin" element={<AdminPanel />} /> 
+        <Route path="/admin" element={<AdminPanel />} />
+        <Route path="/" element={<Dashboard />} />
+        {/* <-- ESTA ES LA RUTA NUEVA --> */}
+        <Route path="/modulo/:id" element={<Modulo />} /> 
       </Routes>
     </BrowserRouter>
   );

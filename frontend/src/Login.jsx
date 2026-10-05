@@ -23,9 +23,10 @@ function Login() {
       if (respuesta.ok) {
         setAlerta({ tipo: 'exito', texto: `¡Bienvenido ${datos.usuario.nombre}! Identificando perfil...` });
         
-        // Guardamos los datos en la memoria
+        // Guardamos TODA la información vital en la memoria (incluyendo el ID)
         localStorage.setItem('token_hseq', datos.token);
         localStorage.setItem('nombre_hseq', datos.usuario.nombre);
+        localStorage.setItem('id_hseq', datos.usuario.id); // <-- ¡LÍNEA AÑADIDA PARA SOLUCIONAR EL ERROR!
         
         // Capturamos el rol (si por alguna razón no viene, asumimos TRABAJADOR)
         const rolUsuario = datos.usuario.rol || 'TRABAJADOR';
