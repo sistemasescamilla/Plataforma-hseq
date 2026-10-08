@@ -19,23 +19,16 @@ const pool = new Pool({
 });
 
 // ==========================================
-// 1. LOGIN A PRUEBA DE FALLOS CON DIAGNÓSTICO
+// 1. LOGIN
 // ==========================================
 app.post('/api/auth/login', async (req, res) => {
-  console.log("\n=== NUEVO INTENTO DE LOGIN ===");
-  console.log("1. Datos que envió el frontend:", req.body);
-  
   const cedulaRecibida = req.body.cedula || req.body.identificacion;
   const passwordRecibida = req.body.password;
-  
-  console.log("2. Cédula procesada:", cedulaRecibida);
 
   try {
     const result = await pool.query('SELECT * FROM usuarios WHERE cedula = $1', [cedulaRecibida]);
-    console.log("3. Usuarios encontrados en la BD con esa cédula:", result.rows.length);
     
     if (result.rows.length === 0) {
-      console.log("❌ FALLO: La cédula no existe en la base de datos.");
       return res.status(401).json({ error: 'Cédula o contraseña incorrecta' });
     }
     
@@ -43,24 +36,22 @@ app.post('/api/auth/login', async (req, res) => {
     const passwordValida = await bcrypt.compare(passwordRecibida, usuario.password);
     
     if (!passwordValida) {
-      console.log("❌ FALLO: La contraseña ingresada no coincide con la encriptada.");
       return res.status(401).json({ error: 'Cédula o contraseña incorrecta' });
     }
     
-    console.log("✅ ÉXITO: Login aprobado para", usuario.nombre);
     res.json({
       mensaje: 'Login exitoso',
       usuario: { id: usuario.id, nombre: usuario.nombre, rol: usuario.rol },
       token: 'token_seguro_123'
     });
   } catch (error) {
-    console.error("❌ ERROR DEL SERVIDOR:", error);
+    console.error("Error login:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
 // ==========================================
-// 2. RUTAS DEL PANEL ADMINISTRATIVO (CRUD)
+// 2. PANEL ADMINISTRATIVO (CRUD USUARIOS)
 // ==========================================
 app.get('/api/admin/usuarios', async (req, res) => {
   try {
@@ -122,14 +113,16 @@ app.delete('/api/admin/usuarios/:id', async (req, res) => {
 });
 
 // ==========================================
-// 3. RUTAS DE MATRÍCULAS
+// 3. MATRÍCULAS CON FECHAS INDIVIDUALES
 // ==========================================
 app.get('/api/admin/matriculas/:usuario_id', async (req, res) => {
   try {
     const { usuario_id } = req.params;
-    const result = await pool.query("SELECT modulo_id FROM progresos WHERE usuario_id = $1", [usuario_id]);
-    const modulosAsignados = result.rows.map(row => row.modulo_id);
-    res.json(modulosAsignados);
+    const result = await pool.query(
+      "SELECT modulo_id, fecha_limite FROM progresos WHERE usuario_id = $1", 
+      [usuario_id]
+    );
+    res.json(result.rows);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -138,22 +131,53 @@ app.get('/api/admin/matriculas/:usuario_id', async (req, res) => {
 app.post('/api/admin/matriculas/:usuario_id', async (req, res) => {
   try {
     const { usuario_id } = req.params;
-    const { modulos, fecha_limite } = req.body; 
+    const items = req.body.matriculas || [];
     
+    // Normalizar a lista de { modulo_id, fecha_limite }
+    const listaNormalizada = items.map(item => ({
+      modulo_id: parseInt(item.modulo_id),
+      fecha_limite: item.fecha_limite || null
+    })).filter(item => !isNaN(item.modulo_id));
+
+    const nuevosIds = listaNormalizada.map(x => x.modulo_id);
+
     await pool.query('BEGIN');
-    await pool.query("DELETE FROM progresos WHERE usuario_id = $1", [usuario_id]);
     
-    for (let modulo_id of modulos) {
+    // 1. Eliminar de raíz los módulos que el admin desmarcó
+    if (nuevosIds.length === 0) {
+      await pool.query("DELETE FROM progresos WHERE usuario_id = $1", [usuario_id]);
+    } else {
       await pool.query(
-        "INSERT INTO progresos (usuario_id, modulo_id, estado, fecha_limite) VALUES ($1, $2, 'EN_CURSO', $3)",
-        [usuario_id, modulo_id, fecha_limite || null] 
+        "DELETE FROM progresos WHERE usuario_id = $1 AND NOT (modulo_id = ANY($2::int[]))",
+        [usuario_id, nuevosIds]
       );
     }
-    
+
+    // 2. Insertar nuevos o actualizar fechas de los que quedan
+    for (const item of listaNormalizada) {
+      const existe = await pool.query(
+        "SELECT id FROM progresos WHERE usuario_id = $1 AND modulo_id = $2",
+        [usuario_id, item.modulo_id]
+      );
+
+      if (existe.rows.length > 0) {
+        await pool.query(
+          "UPDATE progresos SET fecha_limite = $1 WHERE usuario_id = $2 AND modulo_id = $3",
+          [item.fecha_limite, usuario_id, item.modulo_id]
+        );
+      } else {
+        await pool.query(
+          "INSERT INTO progresos (usuario_id, modulo_id, estado, fecha_limite, intentos, calificacion) VALUES ($1, $2, 'EN_CURSO', $3, 0, 0)",
+          [usuario_id, item.modulo_id, item.fecha_limite]
+        );
+      }
+    }
+
     await pool.query('COMMIT');
-    res.json({ mensaje: "Matrícula actualizada" });
+    res.json({ mensaje: "Matrícula actualizada exitosamente" });
   } catch (error) {
     await pool.query('ROLLBACK');
+    console.error("Error guardando matrícula:", error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -179,28 +203,19 @@ app.get('/api/usuario/:id/modulos', async (req, res) => {
 });
 
 // ==========================================
-// INICIO DEL SERVIDOR (SIEMPRE AL FINAL)
-// ==========================================
-app.listen(PORT, () => {
-  console.log(`Servidor corriendo en http://localhost:${PORT}`);
-});
-// ==========================================
-// 5. RUTAS DEL AULA VIRTUAL (EVALUACIONES)
+// 5. EVALUACIONES
 // ==========================================
 app.post('/api/usuario/:usuario_id/modulo/:modulo_id/evaluar', async (req, res) => {
   try {
     const { usuario_id, modulo_id } = req.params;
     const { calificacion } = req.body;
-
-    // Si saca 80 o más, aprueba. Si no, sigue EN_CURSO pero suma un intento.
     const estadoNuevo = calificacion >= 80 ? 'APROBADO' : 'EN_CURSO';
     
-    // Si aprueba, guardamos la fecha exacta
     const query = `
       UPDATE progresos 
       SET calificacion = $1, 
           estado = $2, 
-          intentos = intentos + 1,
+          intentos = COALESCE(intentos, 0) + 1,
           fecha_aprobacion = CASE WHEN $2 = 'APROBADO' THEN CURRENT_TIMESTAMP ELSE fecha_aprobacion END
       WHERE usuario_id = $3 AND modulo_id = $4
     `;
@@ -210,4 +225,8 @@ app.post('/api/usuario/:usuario_id/modulo/:modulo_id/evaluar', async (req, res) 
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+});
+
+app.listen(PORT, () => {
+  console.log(`Servidor corriendo en http://localhost:${PORT}`);
 });

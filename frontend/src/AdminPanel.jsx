@@ -6,9 +6,13 @@ function AdminPanel() {
   const [trabajadorSeleccionado, setTrabajadorSeleccionado] = useState(null);
   const [modalActivo, setModalActivo] = useState(null);
   const [formulario, setFormulario] = useState({ cedula: '', nombre: '', cargo: '', password: '' });
+  const [mostrarPasswordModal, setMostrarPasswordModal] = useState(false);
   
-  const [modulosAsignados, setModulosAsignados] = useState([]);
-  const [fechaLimite, setFechaLimite] = useState('');
+  const [cargando, setCargando] = useState(false);
+  const [notificacion, setNotificacion] = useState({ visible: false, mensaje: '', tipo: '' });
+  
+  // Guardamos un mapa de { [modulo_id]: 'fecha_limite' }
+  const [matriculas, setMatriculas] = useState({});
 
   const modulosDB = [
     { id: 1, titulo: "Inducción SST" },
@@ -23,13 +27,27 @@ function AdminPanel() {
     { id: 10, titulo: "Brigadista Integral" }
   ];
 
+  const cargosNavales = [
+    "Soldador", "Armador", "Ayudante", "Operador de Grúa", 
+    "Supervisor HSEQ", "Electricista Naval", "Mecánico Naval", 
+    "Pintor Sandblastero", "Ingeniero de Proyectos", "Jefe de Cuadrilla"
+  ];
+
+  const dispararNotificacion = (mensaje, tipo = 'exito') => {
+    setNotificacion({ visible: true, mensaje, tipo });
+    setTimeout(() => setNotificacion({ visible: false, mensaje: '', tipo: '' }), 3500);
+  };
+
   const cargarTrabajadores = async () => {
+    setCargando(true);
     try {
-      const respuesta = await fetch('http://localhost:3000/api/admin/usuarios');
+      const respuesta = await fetch('https://plataforma-hseq.onrender.com/api/admin/usuarios');
       const datos = await respuesta.json();
       setTrabajadores(datos);
     } catch (error) {
-      console.error("Error cargando personal:", error);
+      dispararNotificacion("Error de conexión al cargar personal", "error");
+    } finally {
+      setCargando(false);
     }
   };
 
@@ -40,52 +58,85 @@ function AdminPanel() {
   const seleccionarParaMatricula = async (t) => {
     setTrabajadorSeleccionado(t);
     setModalActivo(null); 
-    setFechaLimite(''); 
+    setCargando(true);
     try {
-      const respuesta = await fetch(`http://localhost:3000/api/admin/matriculas/${t.id}`);
-      const asignados = await respuesta.json();
-      setModulosAsignados(asignados); 
+      const respuesta = await fetch(`https://plataforma-hseq.onrender.com/api/admin/matriculas/${t.id}`);
+      const datos = await respuesta.json();
+      
+      const mapa = {};
+      if (Array.isArray(datos)) {
+        datos.forEach(item => {
+          let fecha = '';
+          if (item.fecha_limite) {
+            fecha = typeof item.fecha_limite === 'string' 
+              ? item.fecha_limite.split('T')[0] 
+              : new Date(item.fecha_limite).toISOString().split('T')[0];
+          }
+          mapa[item.modulo_id] = fecha;
+        });
+      }
+      setMatriculas(mapa);
     } catch (error) {
-      console.error("Error cargando matrícula:", error);
+      dispararNotificacion("No se pudieron cargar los módulos actuales", "error");
+    } finally {
+      setCargando(false);
     }
   };
 
   const toggleModulo = (moduloId) => {
-    if (modulosAsignados.includes(moduloId)) {
-      setModulosAsignados(modulosAsignados.filter(id => id !== moduloId)); 
-    } else {
-      setModulosAsignados([...modulosAsignados, moduloId]); 
-    }
+    setMatriculas(prev => {
+      const copia = { ...prev };
+      if (moduloId in copia) {
+        delete copia[moduloId]; // Desmarcado: se elimina
+      } else {
+        copia[moduloId] = ''; // Marcado: listo para ingresar fecha
+      }
+      return copia;
+    });
+  };
+
+  const cambiarFechaModulo = (moduloId, nuevaFecha) => {
+    setMatriculas(prev => ({
+      ...prev,
+      [moduloId]: nuevaFecha
+    }));
   };
 
   const guardarMatricula = async () => {
+    setCargando(true);
     try {
-      const respuesta = await fetch(`http://localhost:3000/api/admin/matriculas/${trabajadorSeleccionado.id}`, {
+      const listaMatriculas = Object.keys(matriculas).map(id => ({
+        modulo_id: parseInt(id),
+        fecha_limite: matriculas[id] || null
+      }));
+
+      const respuesta = await fetch(`https://plataforma-hseq.onrender.com/api/admin/matriculas/${trabajadorSeleccionado.id}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          modulos: modulosAsignados, 
-          fecha_limite: fechaLimite || null
-        })
+        body: JSON.stringify({ matriculas: listaMatriculas })
       });
 
       const datos = await respuesta.json();
       if (!respuesta.ok) throw new Error(datos.error || 'Error al guardar');
 
-      alert("Matrícula corporativa guardada con éxito.");
+      dispararNotificacion("¡Matrícula guardada y sincronizada!");
       setTrabajadorSeleccionado(null); 
     } catch (error) {
-      alert("Error: " + error.message);
+      dispararNotificacion(error.message, "error");
+    } finally {
+      setCargando(false);
     }
   };
 
   const abrirModalCrear = () => {
     setFormulario({ cedula: '', nombre: '', cargo: '', password: '' });
+    setMostrarPasswordModal(false);
     setModalActivo('crear');
   };
 
   const abrirModalEditar = (t) => {
     setFormulario({ cedula: t.cedula, nombre: t.nombre, cargo: t.cargo, password: '' });
+    setMostrarPasswordModal(false);
     setTrabajadorSeleccionado(t);
     setModalActivo('editar');
   };
@@ -97,62 +148,90 @@ function AdminPanel() {
 
   const guardarTrabajador = async (e) => {
     e.preventDefault();
+    setCargando(true);
     try {
-      if (modalActivo === 'crear') {
-        await fetch('http://localhost:3000/api/admin/usuarios', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(formulario)
-        });
-      } else if (modalActivo === 'editar') {
-        await fetch(`http://localhost:3000/api/admin/usuarios/${trabajadorSeleccionado.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(formulario)
-        });
-      }
+      let metodo = modalActivo === 'crear' ? 'POST' : 'PUT';
+      let url = modalActivo === 'crear' 
+        ? 'https://plataforma-hseq.onrender.com/api/admin/usuarios' 
+        : `https://plataforma-hseq.onrender.com/api/admin/usuarios/${trabajadorSeleccionado.id}`;
+
+      const respuesta = await fetch(url, {
+        method: metodo,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formulario)
+      });
+      
+      if (!respuesta.ok) throw new Error('Operación rechazada');
+
       await cargarTrabajadores(); 
       setModalActivo(null);
+      dispararNotificacion(modalActivo === 'crear' ? "Colaborador registrado con éxito" : "Datos actualizados correctamente");
     } catch (error) {
-      alert("Error en base de datos");
+      dispararNotificacion("Error en base de datos", "error");
+      setCargando(false);
     }
   };
 
   const confirmarEliminacion = async () => {
+    setCargando(true);
     try {
-      await fetch(`http://localhost:3000/api/admin/usuarios/${trabajadorSeleccionado.id}`, { method: 'DELETE' });
+      await fetch(`https://plataforma-hseq.onrender.com/api/admin/usuarios/${trabajadorSeleccionado.id}`, { method: 'DELETE' });
       await cargarTrabajadores();
       setModalActivo(null);
       setTrabajadorSeleccionado(null);
+      dispararNotificacion("Colaborador dado de baja del sistema.");
     } catch (error) {
-      alert("Error al eliminar");
+      dispararNotificacion("No se pudo procesar la baja", "error");
+      setCargando(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
-      <header className="bg-[#111828] w-full py-4 px-8 shadow-lg flex items-center justify-between border-b-4 border-emerald-600">
+    <div className="min-h-screen bg-slate-50 flex flex-col font-sans relative">
+      
+      {cargando && (
+        <div className="fixed inset-0 bg-[#111828]/60 flex flex-col items-center justify-center z-[100] backdrop-blur-sm transition-all">
+          <div className="w-16 h-16 border-4 border-teal-500 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-teal-400 mt-4 font-bold tracking-[0.3em] text-sm uppercase">Procesando</p>
+        </div>
+      )}
+
+      {notificacion.visible && (
+        <div className={`fixed top-6 right-6 z-[110] px-6 py-4 rounded-lg shadow-2xl font-bold flex items-center gap-3 animate-bounce transition-all ${notificacion.tipo === 'exito' ? 'bg-teal-800 text-white border-l-4 border-teal-400' : 'bg-red-800 text-white border-l-4 border-red-400'}`}>
+          {notificacion.tipo === 'exito' ? (
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>
+          ) : (
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3Z" /></svg>
+          )}
+          <span className="text-sm tracking-wide">{notificacion.mensaje}</span>
+        </div>
+      )}
+
+      {/* HEADER */}
+      <header className="bg-[#111828] w-full py-4 px-8 shadow-lg flex items-center justify-between border-b-4 border-teal-800">
         <div className="flex items-center gap-3">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-10 h-10 text-white">
             <path fillRule="evenodd" d="M11.47 2.47a.75.75 0 0 1 1.06 0l4.5 4.5a.75.75 0 0 1-1.06 1.06l-3.22-3.22V16.5a.75.75 0 0 1-1.5 0V4.81L8.03 8.03a.75.75 0 0 1-1.06-1.06l4.5-4.5ZM3 15.75a.75.75 0 0 1 .75.75v2.25a1.5 1.5 0 0 0 1.5 1.5h13.5a1.5 1.5 0 0 0 1.5-1.5V16.5a.75.75 0 0 1 1.5 0v2.25a3 3 0 0 1-3 3H5.25a3 3 0 0 1-3-3V16.5a.75.75 0 0 1 .75-.75Z" clipRule="evenodd" />
           </svg>
           <div className="leading-none">
             <div className="text-white font-bold text-xl tracking-wider">ASTILLEROS</div>
-            <div className="text-emerald-500 text-[11px] font-bold tracking-[0.2em] mt-1">ESCAMILLA LTDA</div>
+            <div className="text-teal-700 text-[11px] font-bold tracking-[0.2em] mt-1">ESCAMILLA LTDA</div>
           </div>
         </div>
         <div className="flex gap-4">
-          <Link className="text-gray-300 font-semibold hover:text-white transition uppercase tracking-wide text-sm border-b-2 border-transparent hover:border-emerald-500 pb-1" to="/">
+          <Link className="text-gray-300 font-semibold hover:text-white transition uppercase tracking-wide text-sm border-b-2 border-transparent hover:border-teal-700 pb-1" to="/">
             Volver al Dashboard
           </Link>
         </div>
       </header>
 
       <main className="flex-grow p-8 max-w-7xl mx-auto w-full mt-2 flex gap-8">
+        
+        {/* TABLA DE PERSONAL */}
         <div className="w-2/3 bg-white p-6 rounded-xl shadow border border-gray-200 flex flex-col">
           <div className="flex justify-between items-center mb-6 border-b pb-4">
             <h2 className="text-2xl font-bold text-[#111828] uppercase tracking-wide text-sm">Directorio HSEQ</h2>
-            <button onClick={abrirModalCrear} className="bg-emerald-600 text-white font-bold py-2.5 px-5 rounded text-sm hover:bg-emerald-700 transition shadow uppercase tracking-wide flex items-center gap-2">
+            <button onClick={abrirModalCrear} className="bg-teal-700 text-white font-bold py-2.5 px-5 rounded text-sm hover:bg-teal-800 transition shadow uppercase tracking-wide flex items-center gap-2">
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
               Nuevo Trabajador
             </button>
@@ -173,7 +252,7 @@ function AdminPanel() {
                     <td className="p-4 font-mono text-sm text-gray-600">{t.cedula}</td>
                     <td className="p-4">
                       <div className="font-bold text-[#111828]">{t.nombre}</div>
-                      <div className="text-xs text-emerald-700 font-semibold uppercase tracking-wide">{t.cargo}</div>
+                      <div className="text-xs text-teal-800 font-semibold uppercase tracking-wide">{t.cargo}</div>
                     </td>
                     <td className="p-4 flex justify-center gap-3">
                       <button onClick={() => seleccionarParaMatricula(t)} title="Matricular" className="text-slate-400 hover:text-[#111828] transition bg-slate-100 hover:bg-slate-200 p-2 rounded">
@@ -193,43 +272,54 @@ function AdminPanel() {
           </div>
         </div>
 
-        <div className="w-1/3 bg-white p-6 rounded-xl shadow border border-gray-200">
+        {/* PANEL ASIGNACIÓN CON FECHAS INDIVIDUALES */}
+        <div className="w-1/3 bg-white p-6 rounded-xl shadow border border-gray-200 flex flex-col">
           {trabajadorSeleccionado && modalActivo === null ? (
             <>
-              <h2 className="text-lg font-bold text-[#111828] mb-2 uppercase tracking-wide">Asignación HSEQ</h2>
-              <div className="mb-6 pb-4 border-b">
-                <p className="text-xs text-gray-500 uppercase tracking-wide">Matriculando a:</p>
-                <p className="font-bold text-emerald-700 text-lg">{trabajadorSeleccionado.nombre}</p>
+              <h2 className="text-lg font-bold text-[#111828] mb-1 uppercase tracking-wide">Asignación HSEQ</h2>
+              <div className="mb-4 pb-3 border-b">
+                <p className="text-xs text-gray-500 uppercase tracking-wide">Colaborador:</p>
+                <p className="font-bold text-teal-800 text-base">{trabajadorSeleccionado.nombre}</p>
               </div>
               
-              <div className="flex flex-col gap-2 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
-                {modulosDB.map((mod) => (
-                  <label key={mod.id} className="flex items-center p-3 border rounded-lg cursor-pointer hover:bg-slate-50 transition border-gray-100">
-                    <input 
-                      type="checkbox" 
-                      className="mr-3 w-4 h-4 text-emerald-600 rounded focus:ring-emerald-500 border-gray-300" 
-                      checked={modulosAsignados.includes(mod.id)}
-                      onChange={() => toggleModulo(mod.id)}
-                    />
-                    <span className="text-sm font-semibold text-gray-700">{mod.titulo}</span>
-                  </label>
-                ))}
+              <div className="flex flex-col gap-2.5 max-h-[440px] overflow-y-auto pr-2 custom-scrollbar flex-grow">
+                {modulosDB.map((mod) => {
+                  const asignado = mod.id in matriculas;
+                  return (
+                    <div 
+                      key={mod.id} 
+                      className={`p-3 border rounded-lg transition-all ${asignado ? 'bg-teal-50/60 border-teal-600 shadow-sm' : 'bg-white border-gray-200 hover:border-gray-300'}`}
+                    >
+                      <label className="flex items-center cursor-pointer select-none">
+                        <input 
+                          type="checkbox" 
+                          className="mr-3 w-4 h-4 text-teal-700 rounded focus:ring-teal-700 border-gray-300" 
+                          checked={asignado}
+                          onChange={() => toggleModulo(mod.id)}
+                        />
+                        <span className="text-sm font-semibold text-gray-800">{mod.titulo}</span>
+                      </label>
+
+                      {asignado && (
+                        <div className="mt-2.5 pt-2 border-t border-teal-100 flex items-center justify-between gap-2 pl-7">
+                          <span className="text-xs font-bold text-teal-900 uppercase tracking-wider">Vence:</span>
+                          <input 
+                            type="date" 
+                            className="px-2.5 py-1 bg-white border border-teal-300 rounded text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-teal-700 shadow-sm font-sans"
+                            value={matriculas[mod.id] || ''}
+                            onChange={(e) => cambiarFechaModulo(mod.id, e.target.value)}
+                            min={new Date().toISOString().split('T')[0]} 
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
-              <div className="mt-6 p-4 bg-slate-50 border border-slate-200 rounded-lg">
-                <label className="block text-xs font-bold text-slate-700 mb-2 uppercase tracking-wide">Fecha Límite (Opcional)</label>
-                <input 
-                  type="date" 
-                  className="w-full px-4 py-2 bg-white border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-emerald-500 text-gray-700 text-sm"
-                  value={fechaLimite}
-                  onChange={(e) => setFechaLimite(e.target.value)}
-                  min={new Date().toISOString().split('T')[0]} 
-                />
-              </div>
-              
               <button 
                 onClick={guardarMatricula}
-                className="w-full mt-6 bg-[#111828] text-white font-bold px-4 py-3.5 rounded hover:bg-emerald-600 transition shadow uppercase tracking-wider text-sm"
+                className="w-full mt-5 bg-[#111828] text-white font-bold px-4 py-3.5 rounded hover:bg-teal-800 transition shadow uppercase tracking-wider text-sm"
               >
                 Confirmar Matrícula
               </button>
@@ -245,32 +335,46 @@ function AdminPanel() {
         </div>
       </main>
 
+      {/* MODALES */}
       {(modalActivo === 'crear' || modalActivo === 'editar') && (
         <div className="fixed inset-0 bg-[#111828]/80 flex items-center justify-center z-50 backdrop-blur-sm">
-          <div className="bg-white p-8 rounded-xl w-full max-w-md shadow-2xl border-t-4 border-emerald-600">
+          <div className="bg-white p-8 rounded-xl w-full max-w-md shadow-2xl border-t-4 border-teal-800">
             <h2 className="text-xl font-bold text-[#111828] mb-6 uppercase tracking-wide border-b pb-3">
               {modalActivo === 'crear' ? 'Registrar Colaborador' : 'Actualizar Datos'}
             </h2>
             <form onSubmit={guardarTrabajador} className="flex flex-col gap-4">
               <div>
                 <label className="block text-xs font-bold text-gray-500 mb-1 uppercase tracking-wide">Identificación</label>
-                <input type="text" required value={formulario.cedula} onChange={e => setFormulario({...formulario, cedula: e.target.value.replace(/\D/g, '')})} className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono text-sm" />
+                <input type="text" required value={formulario.cedula} onChange={e => setFormulario({...formulario, cedula: e.target.value.replace(/\D/g, '')})} className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded focus:outline-none focus:ring-2 focus:ring-teal-700 font-mono text-sm" placeholder="Solo números"/>
               </div>
               <div>
                 <label className="block text-xs font-bold text-gray-500 mb-1 uppercase tracking-wide">Nombre Completo</label>
-                <input type="text" required value={formulario.nombre} onChange={e => setFormulario({...formulario, nombre: e.target.value})} className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm" />
+                <input type="text" required value={formulario.nombre} onChange={e => setFormulario({...formulario, nombre: e.target.value.replace(/[^a-zA-ZáéíóúÁÉÍÓÚñÑ\s]/g, '')})} className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded focus:outline-none focus:ring-2 focus:ring-teal-700 text-sm" placeholder="Solo letras"/>
               </div>
               <div>
                 <label className="block text-xs font-bold text-gray-500 mb-1 uppercase tracking-wide">Cargo Asignado</label>
-                <input type="text" required value={formulario.cargo} onChange={e => setFormulario({...formulario, cargo: e.target.value})} className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm" />
+                <select required value={formulario.cargo} onChange={e => setFormulario({...formulario, cargo: e.target.value})} className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded focus:outline-none focus:ring-2 focus:ring-teal-700 text-sm appearance-none">
+                  <option value="" disabled>Seleccione un cargo naval...</option>
+                  {cargosNavales.map(cargo => <option key={cargo} value={cargo}>{cargo}</option>)}
+                  <option value="ADMIN">Administrador de Sistema (ADMIN)</option>
+                </select>
               </div>
               <div className="mt-2">
                 <label className="block text-xs font-bold text-gray-500 mb-1 uppercase tracking-wide">{modalActivo === 'crear' ? 'Contraseña Inicial' : 'Nueva Contraseña (Opcional)'}</label>
-                <input type="password" required={modalActivo === 'crear'} minLength={8} value={formulario.password} onChange={e => setFormulario({...formulario, password: e.target.value})} className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm tracking-widest" placeholder="••••••••" />
+                <div className="relative">
+                  <input type={mostrarPasswordModal ? "text" : "password"} required={modalActivo === 'crear'} minLength={8} value={formulario.password} onChange={e => setFormulario({...formulario, password: e.target.value})} className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded focus:outline-none focus:ring-2 focus:ring-teal-700 text-sm tracking-widest pr-10" placeholder="••••••••" />
+                  <button type="button" onClick={() => setMostrarPasswordModal(!mostrarPasswordModal)} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-teal-800 focus:outline-none">
+                    {mostrarPasswordModal ? (
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 0 0 1.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.451 10.451 0 0 1 12 4.5c4.756 0 8.773 3.162 10.065 7.498a10.522 10.522 0 0 1-4.293 5.774M6.228 6.228 3 3m3.228 3.228 3.65 3.65m7.894 7.894L21 21m-3.228-3.228-3.65-3.65m0 0a3 3 0 1 0-4.243-4.243m4.242 4.242L9.88 9.88" /></svg>
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5"><path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" /><path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" /></svg>
+                    )}
+                  </button>
+                </div>
               </div>
               <div className="flex gap-4 mt-6">
                 <button type="button" onClick={() => setModalActivo(null)} className="w-1/2 bg-slate-100 text-slate-600 font-bold py-3 rounded hover:bg-slate-200 transition text-sm uppercase tracking-wide">Cancelar</button>
-                <button type="submit" className="w-1/2 bg-emerald-600 text-white font-bold py-3 rounded hover:bg-emerald-700 transition text-sm uppercase tracking-wide shadow-md">Guardar</button>
+                <button type="submit" className="w-1/2 bg-teal-800 text-white font-bold py-3 rounded hover:bg-teal-900 transition text-sm uppercase tracking-wide shadow-md">Guardar</button>
               </div>
             </form>
           </div>

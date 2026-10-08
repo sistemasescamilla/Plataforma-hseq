@@ -1,4 +1,4 @@
-fetch('http://localhost:3000/api/auth/registro', {
+fetch('https://plataforma-hseq.onrender.com/api/auth/registro', {
     method: 'POST',
     headers: {
         'Content-Type': 'application/json'

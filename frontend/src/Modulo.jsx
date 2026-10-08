@@ -36,7 +36,7 @@ function Modulo() {
     // Enviamos la nota al Backend
     const usuarioId = localStorage.getItem('id_hseq');
     try {
-      await fetch(`http://localhost:3000/api/usuario/${usuarioId}/modulo/${id}/evaluar`, {
+      await fetch(`https://plataforma-hseq.onrender.com/api/usuario/${usuarioId}/modulo/${id}/evaluar`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ calificacion })

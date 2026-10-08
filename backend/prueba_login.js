@@ -1,4 +1,4 @@
-fetch('http://localhost:3000/api/auth/login', {
+fetch('https://plataforma-hseq.onrender.com/api/auth/login', {
     method: 'POST',
     headers: {
         'Content-Type': 'application/json'
